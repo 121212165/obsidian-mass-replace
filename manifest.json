@@ -1,7 +1,7 @@
 {
   "id": "mass-replace",
   "name": "Mass Replace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.4.0",
   "description": "Vault-wide find and replace with regex support, per-file match preview, selective apply, automatic .bak backups and one-click undo of the last run.",
   "author": "121212165",

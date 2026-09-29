@@ -11,8 +11,11 @@ const DEFAULT_SETTINGS = {
 
 module.exports = class MassReplace extends Plugin {
   async onload() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    this.lastRun = null; // {changes:[{path,from,to,count}], find, replace, flags} 用于撤销
+    const saved = (await this.loadData()) || {};
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved.settings || saved);
+    // 撤销历史持久化（最近 5 轮；含替换前后全文，跨会话可撤销）
+    this.history = saved.history || [];
+    this.lastRun = null;
 
     this.addRibbonIcon("replace", "Mass Replace 全库替换", () => new ReplaceModal(this).open());
     this.addCommand({ id: "open", name: "打开全库替换", callback: () => new ReplaceModal(this).open() });
@@ -20,6 +23,10 @@ module.exports = class MassReplace extends Plugin {
     this.addSettingTab(new MRSettingTab(this.app, this));
   }
   async saveSettings() { await this.saveData(this.settings); }
+
+  async saveState() {
+    await this.saveData({ settings: this.settings, history: this.history });
+  }
 
   extList() { return this.settings.includeExt.split(",").map((s) => s.trim().replace(/^\./, "")).filter(Boolean); }
 
@@ -65,18 +72,24 @@ module.exports = class MassReplace extends Plugin {
       changes.push({ path: f.path, from: text, to: newText, count: m.length });
     }
     this.lastRun = { changes };
+    if (changes.length) {
+      this.history.unshift({ at: new Date().toISOString(), changes });
+      this.history = this.history.slice(0, 5); // 只留最近 5 轮
+      await this.saveState();
+    }
     new Notice(`已替换 ${changes.length} 个文件（.bak 备份已${this.settings.backup ? "写入原目录" : "关闭"}）`);
     return changes;
   }
 
   /** 撤销：把 from 写回（.bak 不删，双保险） */
   async undo() {
-    if (!this.lastRun || !this.lastRun.changes.length) {
-      new Notice("没有可撤销的替换记录（仅本次会话内有效）");
+    const round = this.lastRun || this.history[0];
+    if (!round || !round.changes.length) {
+      new Notice("没有可撤销的替换记录");
       return;
     }
     let n = 0;
-    for (const c of this.lastRun.changes) {
+    for (const c of round.changes) {
       const f = this.app.vault.getAbstractFileByPath(c.path);
       if (f instanceof TFile) {
         await this.app.vault.process(f, () => c.from);
@@ -84,7 +97,19 @@ module.exports = class MassReplace extends Plugin {
       }
     }
     this.lastRun = null;
-    new Notice(`已撤销 ${n} 个文件`);
+    this.history = this.history.filter((h) => h !== round);
+    await this.saveState();
+    new Notice(`已撤销 ${n} 个文件（${round.at.slice(0, 16).replace("T", " ")} 那轮）`);
+  }
+
+  /** 简易 glob 过滤：* 任意段、? 单字符（对文件路径匹配） */
+  globMatch(pattern, path) {
+    const esc = pattern.split("").map((ch) => {
+      if (ch === "*") return ".*";
+      if (ch === "?") return ".";
+      return ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }).join("");
+    return new RegExp("^" + esc + "$").test(path);
   }
 };
 
@@ -120,7 +145,7 @@ class ReplaceModal extends Modal {
     const repl = replRow.createEl("input", { type: "text", placeholder: "留空=删除匹配（正则可用 $1 组）" });
     repl.style.flex = "1";
     const scopeRow = row("范围过滤");
-    const scope = scopeRow.createEl("input", { type: "text", placeholder: "路径前缀，逗号分隔，留空=全库" });
+    const scope = scopeRow.createEl("input", { type: "text", placeholder: "路径前缀或 glob（日记/*、*.md），逗号分隔，留空=全库" });
     scope.style.flex = "1";
 
     const scanBtn = contentEl.createEl("button", { text: "① 扫描预览", cls: "mod-cta" });
@@ -146,7 +171,9 @@ class ReplaceModal extends Modal {
       const exts = this.plugin.extList();
       scanBtn.disabled = true; scanBtn.setText("扫描中…");
       const all = await this.plugin.scan(re, exts);
-      scanned = scopes.length ? all.filter((x) => scopes.some((p) => x.file.path.startsWith(p))) : all;
+      scanned = scopes.length
+        ? all.filter((x) => scopes.some((p) => p.includes("*") || p.includes("?") ? this.plugin.globMatch(p, x.file.path) : x.file.path.startsWith(p)))
+        : all;
       scanBtn.disabled = false; scanBtn.setText("① 扫描预览");
 
       resultEl.createEl("div", {
