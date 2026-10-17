@@ -20,6 +20,7 @@ module.exports = class MassReplace extends Plugin {
     this.addRibbonIcon("replace", "Mass Replace 全库替换", () => new ReplaceModal(this).open());
     this.addCommand({ id: "open", name: "打开全库替换", callback: () => new ReplaceModal(this).open() });
     this.addCommand({ id: "undo", name: "撤销上一轮替换", callback: () => this.undo() });
+    this.addCommand({ id: "undo-pick", name: "指定一轮撤销…", callback: () => new UndoPickModal(this).open() });
     this.addSettingTab(new MRSettingTab(this.app, this));
   }
   async saveSettings() { await this.saveData(this.settings); }
@@ -81,13 +82,8 @@ module.exports = class MassReplace extends Plugin {
     return changes;
   }
 
-  /** 撤销：把 from 写回（.bak 不删，双保险） */
-  async undo() {
-    const round = this.lastRun || this.history[0];
-    if (!round || !round.changes.length) {
-      new Notice("没有可撤销的替换记录");
-      return;
-    }
+  /** 撤销指定轮次：把 from 写回（.bak 不删，双保险）；轮次从 history 移除 */
+  async undoRound(round) {
     let n = 0;
     for (const c of round.changes) {
       const f = this.app.vault.getAbstractFileByPath(c.path);
@@ -102,6 +98,16 @@ module.exports = class MassReplace extends Plugin {
     new Notice(`已撤销 ${n} 个文件（${round.at.slice(0, 16).replace("T", " ")} 那轮）`);
   }
 
+  /** 撤销：把 from 写回（.bak 不删，双保险） */
+  async undo() {
+    const round = this.lastRun || this.history[0];
+    if (!round || !round.changes.length) {
+      new Notice("没有可撤销的替换记录");
+      return;
+    }
+    await this.undoRound(round);
+  }
+
   /** 简易 glob 过滤：* 任意段、? 单字符（对文件路径匹配） */
   globMatch(pattern, path) {
     const esc = pattern.split("").map((ch) => {
@@ -111,7 +117,76 @@ module.exports = class MassReplace extends Plugin {
     }).join("");
     return new RegExp("^" + esc + "$").test(path);
   }
+
+  /** dry-run 预览报告（markdown）：每文件命中数 + 行摘录 */
+  buildReport(find, replacement, scanned) {
+    const lines = [
+      "# Mass Replace 预览报告 " + new Date().toISOString().slice(0, 16).replace("T", " "),
+      "",
+      `- 查找：\`${find}\``,
+      `- 替换为：\`${replacement || "(删除匹配)"}\``,
+      `- 命中 ${scanned.length} 个文件 / ${scanned.reduce((s, x) => s + x.count, 0)} 处`,
+      "",
+      "| 文件 | 命中 | 首处行 |",
+      "|---|---|---|",
+    ];
+    for (const x of scanned) {
+      const first = x.lines.length ? `L${x.lines[0].n}` : "";
+      lines.push(`| \`${x.file.path}\` | ${x.count} | ${first} |`);
+    }
+    return lines.join("\n");
+  }
 };
+
+class UndoPickModal extends Modal {
+  constructor(plugin) { super(plugin.app); this.plugin = plugin; }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "⏪ 指定一轮撤销" });
+    const rounds = this.plugin.history || [];
+    if (!rounds.length) {
+      contentEl.createEl("div", { text: "暂无替换历史。", attr: { style: "color:var(--text-muted); font-size:12px;" } });
+      return;
+    }
+    contentEl.createEl("div", { text: "撤销会把该轮所有文件的全文写回文前状态；此轮记录将从历史中移除。", attr: { style: "color:var(--text-muted); font-size:11px; margin-bottom:6px;" } });
+    for (const r of rounds) {
+      const nFiles = r.changes.length;
+      const nHits = r.changes.reduce((s, c) => s + (c.count || 0), 0);
+      const item = contentEl.createDiv();
+      item.style.cssText = "display:flex; align-items:center; gap:8px; padding:4px 6px; margin-bottom:3px; border:1px solid var(--background-modifier-border); border-radius:6px; font-size:12px;";
+      const lbl = item.createDiv();
+      lbl.style.cssText = "flex:1;";
+      lbl.createEl("div", { text: r.at.slice(0, 16).replace("T", " "), attr: { style: "font-weight:600;" } });
+      lbl.createEl("div", { text: `${nFiles} 个文件 / ${nHits} 处 · ${r.changes[0].path}${nFiles > 1 ? ` 等${nFiles}个` : ""}`, attr: { style: "color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" } });
+      item.createEl("button", { text: "撤销该轮" }).onclick = async (ev) => {
+        ev.currentTarget.disabled = true; ev.currentTarget.setText("撤销中…");
+        await this.plugin.undoRound(r);
+        this.close();
+      };
+    }
+  }
+  onClose() { this.contentEl.empty(); }
+}
+
+class ConfirmWikilinkModal extends Modal {
+  constructor(app, onConfirm) { super(app); this.onConfirm = onConfirm; }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "⚠️ wikilink 命中确认" });
+    contentEl.createEl("div", {
+      text: "本轮替换命中了包含 [[wikilink]] 的行。误替换可能破坏全库链接。\n要继续应用，请在主预览中逐条核对路径后重试。",
+      attr: { style: "white-space:pre-line; font-size:13px; margin-bottom:10px;" },
+    });
+    const row = contentEl.createDiv();
+    row.style.cssText = "display:flex; gap:8px;";
+    const back = row.createEl("button", { text: "返回核对" });
+    back.onclick = () => this.close();
+    const go = row.createEl("button", { text: "我已核对，继续应用", cls: "mod-cta" });
+    go.onclick = () => { this.close(); this.onConfirm(); };
+  }
+  onClose() { this.contentEl.empty(); }
+}
 
 class ReplaceModal extends Modal {
   constructor(plugin) { super(plugin.app); this.plugin = plugin; }
@@ -180,6 +255,19 @@ class ReplaceModal extends Modal {
         text: scanned.length ? `命中 ${scanned.length} 个文件 / ${scanned.reduce((s, x) => s + x.count, 0)} 处（已全选，取消勾选可跳过）` : "无命中。",
         attr: { style: "font-size:12px; font-weight:600; margin-bottom:4px;" },
       });
+      // wikilink 命中预警：误替换会污染全链引用，需显式确认才允许应用（issue#1）
+      this.wikilinkRisk = scanned.some((x) => x.lines.some((l) => l.text.includes("[[")));
+      if (this.wikilinkRisk) {
+        resultEl.createEl("div", {
+          text: "⚠️ 命中行包含 [[wikilink]]——误替换会污染全库链接，请逐条核对路径再应用。",
+          attr: { style: "color:var(--text-warning, #e6b450); font-size:12px; font-weight:600; margin-bottom:4px;" },
+        });
+      }
+      const repBtn = resultEl.createEl("button", { text: "复制 dry-run 报告", attr: { style: "font-size:11px; margin-bottom:6px;" } });
+      repBtn.onclick = () => {
+        navigator.clipboard.writeText(this.plugin.buildReport(find.value, repl.value, scanned));
+        new Notice("预览报告已复制到剪贴板");
+      };
       this.checkboxes = [];
       for (const hit of scanned) {
         const item = resultEl.createDiv();
@@ -200,10 +288,12 @@ class ReplaceModal extends Modal {
       }
     };
 
-    contentEl.createEl("button", {
+    const applyBtn = contentEl.createEl("button", {
       text: "② 应用到勾选文件（.bak 备份：" + (this.plugin.settings.backup ? "开" : "关") + "）",
       cls: "mod-cta",
-    }).onclick = async () => {
+    });
+    applyBtn.style.width = "100%";
+    applyBtn.onclick = async () => {
       if (!scanned || !this.checkboxes) {
         new Notice("请先扫描预览");
         return;
@@ -211,6 +301,13 @@ class ReplaceModal extends Modal {
       const chosen = this.checkboxes.filter((x) => x.cb.checked).map((x) => x.hit.file);
       if (!chosen.length) {
         new Notice("未勾选任何文件");
+        return;
+      }
+      if (this.wikilinkRisk && !this.wikilinkConfirmed) {
+        new ConfirmWikilinkModal(this.app, () => {
+          this.wikilinkConfirmed = true;
+          applyBtn.click();
+        }).open();
         return;
       }
       let re;
