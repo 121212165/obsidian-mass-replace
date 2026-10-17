@@ -17,10 +17,10 @@ module.exports = class MassReplace extends Plugin {
     this.history = saved.history || [];
     this.lastRun = null;
 
-    this.addRibbonIcon("replace", "Mass Replace 全库替换", () => new ReplaceModal(this).open());
-    this.addCommand({ id: "open", name: "打开全库替换", callback: () => new ReplaceModal(this).open() });
-    this.addCommand({ id: "undo", name: "撤销上一轮替换", callback: () => this.undo() });
-    this.addCommand({ id: "undo-pick", name: "指定一轮撤销…", callback: () => new UndoPickModal(this).open() });
+    this.addRibbonIcon("replace", "Mass Replace — vault-wide replace", () => new ReplaceModal(this).open());
+    this.addCommand({ id: "open", name: "Open vault-wide replace", callback: () => new ReplaceModal(this).open() });
+    this.addCommand({ id: "undo", name: "Undo the last replace", callback: () => this.undo() });
+    this.addCommand({ id: "undo-pick", name: "Undo a specific round…", callback: () => new UndoPickModal(this).open() });
     this.addSettingTab(new MRSettingTab(this.app, this));
   }
   async saveSettings() { await this.saveData(this.settings); }
@@ -78,7 +78,7 @@ module.exports = class MassReplace extends Plugin {
       this.history = this.history.slice(0, 5); // 只留最近 5 轮
       await this.saveState();
     }
-    new Notice(`已替换 ${changes.length} 个文件（.bak 备份已${this.settings.backup ? "写入原目录" : "关闭"}）`);
+    new Notice(`Replaced ${changes.length} file(s) (.bak backup ${this.settings.backup ? "written" : "off"})`);
     return changes;
   }
 
@@ -95,14 +95,14 @@ module.exports = class MassReplace extends Plugin {
     this.lastRun = null;
     this.history = this.history.filter((h) => h !== round);
     await this.saveState();
-    new Notice(`已撤销 ${n} 个文件（${round.at.slice(0, 16).replace("T", " ")} 那轮）`);
+    new Notice(`Restored ${n} file(s) (round at ${round.at.slice(0, 16).replace("T", " ")})`);
   }
 
   /** 撤销：把 from 写回（.bak 不删，双保险） */
   async undo() {
     const round = this.lastRun || this.history[0];
     if (!round || !round.changes.length) {
-      new Notice("没有可撤销的替换记录");
+      new Notice("Nothing to undo");
       return;
     }
     await this.undoRound(round);
@@ -121,13 +121,13 @@ module.exports = class MassReplace extends Plugin {
   /** dry-run 预览报告（markdown）：每文件命中数 + 行摘录 */
   buildReport(find, replacement, scanned) {
     const lines = [
-      "# Mass Replace 预览报告 " + new Date().toISOString().slice(0, 16).replace("T", " "),
+      "# Mass Replace Preview Report " + new Date().toISOString().slice(0, 16).replace("T", " "),
       "",
-      `- 查找：\`${find}\``,
-      `- 替换为：\`${replacement || "(删除匹配)"}\``,
-      `- 命中 ${scanned.length} 个文件 / ${scanned.reduce((s, x) => s + x.count, 0)} 处`,
+      `- Find: \`${find}\``,
+      `- Replace with: \`${replacement || "(delete matches)"}\``,
+      `- Matches: ${scanned.length} file(s) / ${scanned.reduce((s, x) => s + x.count, 0)} match(es)`,
       "",
-      "| 文件 | 命中 | 首处行 |",
+      "| File | Matches | First line |",
       "|---|---|---|",
     ];
     for (const x of scanned) {
@@ -143,13 +143,13 @@ class UndoPickModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h3", { text: "⏪ 指定一轮撤销" });
+    contentEl.createEl("h3", { text: "⏪ Undo a specific round" });
     const rounds = this.plugin.history || [];
     if (!rounds.length) {
-      contentEl.createEl("div", { text: "暂无替换历史。", attr: { style: "color:var(--text-muted); font-size:12px;" } });
+      contentEl.createEl("div", { text: "No replace history yet.", attr: { style: "color:var(--text-muted); font-size:12px;" } });
       return;
     }
-    contentEl.createEl("div", { text: "撤销会把该轮所有文件的全文写回文前状态；此轮记录将从历史中移除。", attr: { style: "color:var(--text-muted); font-size:11px; margin-bottom:6px;" } });
+    contentEl.createEl("div", { text: "Restoring writes back the full pre-replace content of every file in the round; the round is then removed from history.", attr: { style: "color:var(--text-muted); font-size:11px; margin-bottom:6px;" } });
     for (const r of rounds) {
       const nFiles = r.changes.length;
       const nHits = r.changes.reduce((s, c) => s + (c.count || 0), 0);
@@ -158,9 +158,9 @@ class UndoPickModal extends Modal {
       const lbl = item.createDiv();
       lbl.style.cssText = "flex:1;";
       lbl.createEl("div", { text: r.at.slice(0, 16).replace("T", " "), attr: { style: "font-weight:600;" } });
-      lbl.createEl("div", { text: `${nFiles} 个文件 / ${nHits} 处 · ${r.changes[0].path}${nFiles > 1 ? ` 等${nFiles}个` : ""}`, attr: { style: "color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" } });
-      item.createEl("button", { text: "撤销该轮" }).onclick = async (ev) => {
-        ev.currentTarget.disabled = true; ev.currentTarget.setText("撤销中…");
+      lbl.createEl("div", { text: `${nFiles} file(s) / ${nHits} match(es) · ${r.changes[0].path}${nFiles > 1 ? ` +${nFiles - 1} more` : ""}`, attr: { style: "color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" } });
+      item.createEl("button", { text: "Undo this round" }).onclick = async (ev) => {
+        ev.currentTarget.disabled = true; ev.currentTarget.setText("Undoing…");
         await this.plugin.undoRound(r);
         this.close();
       };
@@ -173,16 +173,16 @@ class ConfirmWikilinkModal extends Modal {
   constructor(app, onConfirm) { super(app); this.onConfirm = onConfirm; }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: "⚠️ wikilink 命中确认" });
+    contentEl.createEl("h3", { text: "⚠️ Wikilink matches — confirm" });
     contentEl.createEl("div", {
-      text: "本轮替换命中了包含 [[wikilink]] 的行。误替换可能破坏全库链接。\n要继续应用，请在主预览中逐条核对路径后重试。",
+      text: "This round touches lines containing [[wikilink]]. A bad replace can corrupt cross-note links.\nTo proceed, verify each path in the main preview, then retry.",
       attr: { style: "white-space:pre-line; font-size:13px; margin-bottom:10px;" },
     });
     const row = contentEl.createDiv();
     row.style.cssText = "display:flex; gap:8px;";
-    const back = row.createEl("button", { text: "返回核对" });
+    const back = row.createEl("button", { text: "Back" });
     back.onclick = () => this.close();
-    const go = row.createEl("button", { text: "我已核对，继续应用", cls: "mod-cta" });
+    const go = row.createEl("button", { text: "I've verified — apply anyway", cls: "mod-cta" });
     go.onclick = () => { this.close(); this.onConfirm(); };
   }
   onClose() { this.contentEl.empty(); }
@@ -193,7 +193,7 @@ class ReplaceModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h3", { text: "🔀 Mass Replace 全库替换" });
+    contentEl.createEl("h3", { text: "🔀 Mass Replace — vault-wide replace" });
 
     const row = (label) => {
       const r = contentEl.createDiv();
@@ -201,8 +201,8 @@ class ReplaceModal extends Modal {
       r.createEl("label", { text: label, attr: { style: "width:56px; font-size:12px; font-weight:600;" } });
       return r;
     };
-    const findRow = row("查找");
-    const find = findRow.createEl("input", { type: "text", placeholder: "文本或正则" });
+    const findRow = row("Find");
+    const find = findRow.createEl("input", { type: "text", placeholder: "text or /regex/" });
     find.style.flex = "1";
     const optRow = contentEl.createDiv();
     optRow.style.cssText = "display:flex; gap:14px; margin-bottom:6px; font-size:12px;";
@@ -214,16 +214,16 @@ class ReplaceModal extends Modal {
       l.createEl("span", { text: label });
       return cb;
     };
-    const isRegex = mkToggle(optRow, "正则模式", false);
-    const caseSensitive = mkToggle(optRow, "区分大小写", false);
-    const replRow = row("替换为");
-    const repl = replRow.createEl("input", { type: "text", placeholder: "留空=删除匹配（正则可用 $1 组）" });
+    const isRegex = mkToggle(optRow, "regex mode", false);
+    const caseSensitive = mkToggle(optRow, "case sensitive", false);
+    const replRow = row("Replace with");
+    const repl = replRow.createEl("input", { type: "text", placeholder: "empty = delete matches; regex $1 groups work" });
     repl.style.flex = "1";
-    const scopeRow = row("范围过滤");
-    const scope = scopeRow.createEl("input", { type: "text", placeholder: "路径前缀或 glob（日记/*、*.md），逗号分隔，留空=全库" });
+    const scopeRow = row("Scope filter");
+    const scope = scopeRow.createEl("input", { type: "text", placeholder: "path prefix or glob, comma separated, empty = whole vault" });
     scope.style.flex = "1";
 
-    const scanBtn = contentEl.createEl("button", { text: "① 扫描预览", cls: "mod-cta" });
+    const scanBtn = contentEl.createEl("button", { text: "① Scan & preview", cls: "mod-cta" });
     scanBtn.style.width = "100%";
     const resultEl = contentEl.createDiv();
     resultEl.style.cssText = "margin-top:8px; max-height:45vh; overflow-y:auto;";
@@ -232,41 +232,41 @@ class ReplaceModal extends Modal {
     scanBtn.onclick = async () => {
       resultEl.empty();
       if (!find.value) {
-        resultEl.createEl("div", { text: "请输入查找内容。", attr: { style: "color:var(--text-error); font-size:12px;" } });
+        resultEl.createEl("div", { text: "Enter something to find.", attr: { style: "color:var(--text-error); font-size:12px;" } });
         return;
       }
       let re;
       try {
         re = this.plugin.buildRegex(find.value, isRegex.checked, caseSensitive.checked);
       } catch (e) {
-        resultEl.createEl("div", { text: "正则无效：" + e.message, attr: { style: "color:var(--text-error); font-size:12px;" } });
+        resultEl.createEl("div", { text: "Invalid regex: " + e.message, attr: { style: "color:var(--text-error); font-size:12px;" } });
         return;
       }
       const scopes = scope.value.split(",").map((s) => s.trim()).filter(Boolean);
       const exts = this.plugin.extList();
-      scanBtn.disabled = true; scanBtn.setText("扫描中…");
+      scanBtn.disabled = true; scanBtn.setText("Scanning…");
       const all = await this.plugin.scan(re, exts);
       scanned = scopes.length
         ? all.filter((x) => scopes.some((p) => p.includes("*") || p.includes("?") ? this.plugin.globMatch(p, x.file.path) : x.file.path.startsWith(p)))
         : all;
-      scanBtn.disabled = false; scanBtn.setText("① 扫描预览");
+      scanBtn.disabled = false; scanBtn.setText("① Scan & preview");
 
       resultEl.createEl("div", {
-        text: scanned.length ? `命中 ${scanned.length} 个文件 / ${scanned.reduce((s, x) => s + x.count, 0)} 处（已全选，取消勾选可跳过）` : "无命中。",
+        text: scanned.length ? `${scanned.length} file(s) / ${scanned.reduce((s, x) => s + x.count, 0)} matches — all pre-checked, uncheck files to skip` : "No matches.",
         attr: { style: "font-size:12px; font-weight:600; margin-bottom:4px;" },
       });
       // wikilink 命中预警：误替换会污染全链引用，需显式确认才允许应用（issue#1）
       this.wikilinkRisk = scanned.some((x) => x.lines.some((l) => l.text.includes("[[")));
       if (this.wikilinkRisk) {
         resultEl.createEl("div", {
-          text: "⚠️ 命中行包含 [[wikilink]]——误替换会污染全库链接，请逐条核对路径再应用。",
+          text: "⚠️ Matches touch [[wikilink]] — a bad replace can corrupt cross-note links. Verify each path before applying.",
           attr: { style: "color:var(--text-warning, #e6b450); font-size:12px; font-weight:600; margin-bottom:4px;" },
         });
       }
-      const repBtn = resultEl.createEl("button", { text: "复制 dry-run 报告", attr: { style: "font-size:11px; margin-bottom:6px;" } });
+      const repBtn = resultEl.createEl("button", { text: "Copy dry-run report", attr: { style: "font-size:11px; margin-bottom:6px;" } });
       repBtn.onclick = () => {
         navigator.clipboard.writeText(this.plugin.buildReport(find.value, repl.value, scanned));
-        new Notice("预览报告已复制到剪贴板");
+        new Notice("Preview report copied to clipboard");
       };
       this.checkboxes = [];
       for (const hit of scanned) {
@@ -278,7 +278,7 @@ class ReplaceModal extends Modal {
         cb.checked = true;
         this.checkboxes.push({ cb, hit });
         line1.createEl("span", { text: `${hit.file.path}`, attr: { style: "flex:1; font-weight:600;" } });
-        line1.createEl("span", { text: hit.count + " 处", attr: { style: "color:var(--interactive-accent);" } });
+        line1.createEl("span", { text: hit.count + " match(es)", attr: { style: "color:var(--interactive-accent);" } });
         for (const l of hit.lines) {
           item.createEl("div", {
             text: `L${l.n}: ${l.text}`,
@@ -289,18 +289,18 @@ class ReplaceModal extends Modal {
     };
 
     const applyBtn = contentEl.createEl("button", {
-      text: "② 应用到勾选文件（.bak 备份：" + (this.plugin.settings.backup ? "开" : "关") + "）",
+      text: "② Apply to checked files (.bak backup: " + (this.plugin.settings.backup ? "on" : "off") + ")",
       cls: "mod-cta",
     });
     applyBtn.style.width = "100%";
     applyBtn.onclick = async () => {
       if (!scanned || !this.checkboxes) {
-        new Notice("请先扫描预览");
+        new Notice("Scan first");
         return;
       }
       const chosen = this.checkboxes.filter((x) => x.cb.checked).map((x) => x.hit.file);
       if (!chosen.length) {
-        new Notice("未勾选任何文件");
+        new Notice("No files selected");
         return;
       }
       if (this.wikilinkRisk && !this.wikilinkConfirmed) {
@@ -314,7 +314,7 @@ class ReplaceModal extends Modal {
       try {
         re = this.plugin.buildRegex(find.value, isRegex.checked, caseSensitive.checked);
       } catch (e) {
-        new Notice("正则无效：" + e.message);
+        new Notice("Invalid regex: " + e.message);
         return;
       }
       await this.plugin.apply(re, repl.value, chosen);
@@ -328,13 +328,13 @@ class MRSettingTab extends PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl).setName("应用前写 .bak 备份")
-      .setDesc("每份被修改的文件在同一目录写一份 时间戳.bak（推荐开启）").addToggle((t) =>
+    new Setting(containerEl).setName("Write .bak backup before applying")
+      .setDesc("Writes a timestamped .bak next to each modified file (recommended)").addToggle((t) =>
       t.setValue(this.plugin.settings.backup).onChange(async (v) => {
         this.plugin.settings.backup = v; await this.plugin.saveSettings();
       }));
-    new Setting(containerEl).setName("参与替换的扩展名")
-      .setDesc("逗号分隔，默认仅 md")
+    new Setting(containerEl).setName("File extensions to include")
+      .setDesc("Comma separated, default md only")
       .addText((t) => t.setValue(this.plugin.settings.includeExt).onChange(async (v) => {
         this.plugin.settings.includeExt = v || "md"; await this.plugin.saveSettings();
       }));

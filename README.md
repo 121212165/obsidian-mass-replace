@@ -9,21 +9,34 @@ search-and-replace lacks.
   extensions, default `md`), with optional case sensitivity
 - **Preview before applying** — every file shows its match count and up to
   three matching lines with line numbers
+- **Wikilink guard** — if matches touch `[[wikilink]]` lines, a warning is
+  raised and you must explicitly confirm before anything is written
 - **Selective apply** — matches are pre-checked; uncheck any file to skip it
 - **Automatic `.bak` backups** — each modified file gets a timestamped backup
   next to the original (toggleable)
-- **One-click undo** — the last run is kept in memory and can be reversed
-  exactly (backups stay on disk as a second safety net)
-- Scope filter by path prefix (e.g. run it on one folder only)
+- **Undo history** — the last 5 replace rounds are persisted and can be
+  reversed exactly, *any round at a time* (command: "Undo a specific round…")
+- **Dry-run report** — one click copies a per-file markdown preview report
+- Scope filter by path prefix or glob (e.g. run it on one folder only)
 
 ## Usage
 
-1. Ribbon `replace` icon or command "打开全库替换".
-2. Enter find/replace (toggle 正则模式 for regex, `$1` capture groups work).
-3. ① 扫描预览 → uncheck files you don't want touched.
-4. ② 应用到勾选文件.
+1. Ribbon `replace` icon or command "Open vault-wide replace".
+2. Enter find/replace (toggle "regex mode" for regex; `$1` capture groups work).
+3. ① Scan & preview → uncheck files you don't want touched.
+4. ② Apply to checked files. Or "Copy dry-run report" to review first.
 
-Undo works within the session via command "撤销上一轮替换".
+Undo within and across sessions via "Undo the last replace" or
+"Undo a specific round…".
+
+## Privacy
+
+Runs 100% locally on your vault files. No network access.
+
+## Support
+
+- [Issues](https://github.com/121212165/obsidian-mass-replace/issues) — bug
+  reports and feature requests are welcome.
 
 ## Notes
 
